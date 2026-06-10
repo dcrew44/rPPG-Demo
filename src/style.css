@@ -78,6 +78,13 @@ h1 {
   pointer-events: none;
 }
 
+/* `display: flex` would override the UA's `[hidden] { display: none }`
+   (author styles beat UA styles), leaving the opaque overlay covering the
+   video even while "hidden" — so re-hide it explicitly. */
+.overlay[hidden] {
+  display: none;
+}
+
 .overlay {
   position: absolute;
   inset: 0;
