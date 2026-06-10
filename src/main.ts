@@ -1,17 +1,12 @@
 /**
- * Entry point: wires camera → face tracking → POS → HR → confidence →
- * render, mirroring main.py.
+ * Entry point: wires camera → Pipeline → render, mirroring main.py.
  */
 
 import "./style.css";
-import { RingBuffer } from "./buffer";
 import { CameraError, openCamera, startFrameLoop } from "./capture";
-import { ConfidenceScorer, type ConfidenceResult } from "./confidence";
 import { renderFrame, renderReadout } from "./display";
 import { FaceTracker } from "./face";
-import { HREstimator } from "./hr";
-import { posEstimate } from "./pos";
-import type { State } from "./state";
+import { Pipeline } from "./pipeline";
 
 function getElement<T extends HTMLElement>(id: string): T {
   const el = document.getElementById(id);
@@ -40,46 +35,10 @@ async function run(): Promise<void> {
   await openCamera(video);
 
   readout.status.textContent = "";
-  const buffer = new RingBuffer(10);
-  const hr = new HREstimator();
-  const scorer = new ConfidenceScorer();
-  let lastBpm: number | null = null;
-  let lastConf: ConfidenceResult = {
-    score: null,
-    colorBand: "gray",
-    components: {},
-  };
-  let lastTickT: number | null = null;
+  const pipeline = new Pipeline(tracker);
 
   startFrameLoop(video, (tSeconds, nowMs) => {
-    const detection = tracker.detect(video, nowMs);
-    let pulse: Float64Array = new Float64Array(0);
-
-    if (detection !== null) {
-      scorer.observeFrame(detection.center, detection.bbox);
-      buffer.append(detection.meanRgb, tSeconds);
-    } else {
-      scorer.observeFrame(null, null);
-    }
-
-    const fps = buffer.fps();
-    if (buffer.duration() >= 5 && fps > 0) {
-      pulse = posEstimate(buffer.asArrays().rgb, fps);
-      const analysis = hr.analyze(pulse, fps);
-      if (analysis !== null) lastBpm = analysis.bpm;
-      const dt = lastTickT === null ? 0.5 : tSeconds - lastTickT;
-      lastConf = scorer.score(analysis, dt);
-      lastTickT = tSeconds;
-    }
-
-    const state: State = {
-      bbox: detection?.bbox ?? null,
-      pulseSignal: pulse,
-      bpm: lastBpm,
-      hasFace: detection !== null,
-      confidence: lastConf.score,
-      confidenceColor: lastConf.colorBand,
-    };
+    const state = pipeline.update(video, tSeconds, nowMs);
     renderFrame(canvas, video, state);
     renderReadout(readout, state);
   });
