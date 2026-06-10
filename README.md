@@ -40,7 +40,7 @@ camera → FaceTracker → RingBuffer (skin-ROI mean RGB) → POS → pulse
          (bbox, ROI,                                            ↓
           centroid)                       HREstimator (BPM) + ConfidenceScorer
                                                        ↓
-                                          Pipeline → State → display (canvas)
+                                          Pipeline → State → display (video + DOM box)
 ```
 
 - `src/capture.ts` — webcam + per-frame loop with real media timestamps
@@ -57,7 +57,7 @@ camera → FaceTracker → RingBuffer (skin-ROI mean RGB) → POS → pulse
 - `src/confidence.ts` — SNR + motion composite score, EMA-smoothed, mapped
   to the color band with hysteresis.
 - `src/pipeline.ts` — orchestration: 5 s warm-up, ~0.5 s HR tick.
-- `src/display.ts` / `src/main.ts` — canvas renderer and wiring.
+- `src/display.ts` / `src/main.ts` — video preview + DOM face-box renderer and wiring.
 
 ## Deploy
 

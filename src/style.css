@@ -54,16 +54,28 @@ h1 {
   border-radius: 12px;
   overflow: hidden;
   line-height: 0;
+  min-width: 480px;
+  min-height: 360px;
+  max-width: 100%;
 }
 
-/* The video element only feeds frames to the pipeline; the canvas shows it. */
+/* The video previews itself, mirrored (selfie view), and the face box is a
+   plain absolutely-positioned div. No canvas anywhere in the display path:
+   compositing camera frames (or anything else) through a GPU-accelerated 2D
+   canvas can come up black/empty on some hardware-decode setups. */
 #video {
-  display: none;
-}
-
-#canvas {
+  display: block;
   max-width: 100%;
   height: auto;
+  transform: scaleX(-1);
+}
+
+.facebox {
+  position: absolute;
+  box-sizing: border-box;
+  border: 3px solid #9aa0a8;
+  border-radius: 2px;
+  pointer-events: none;
 }
 
 .overlay {

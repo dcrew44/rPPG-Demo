@@ -4,7 +4,7 @@
 
 import "./style.css";
 import { CameraError, openCamera, startFrameLoop } from "./capture";
-import { renderFrame, renderReadout } from "./display";
+import { renderFaceBox, renderReadout } from "./display";
 import { FaceTracker } from "./face";
 import { Pipeline } from "./pipeline";
 
@@ -15,7 +15,7 @@ function getElement<T extends HTMLElement>(id: string): T {
 }
 
 const video = getElement<HTMLVideoElement>("video");
-const canvas = getElement<HTMLCanvasElement>("canvas");
+const facebox = getElement<HTMLDivElement>("facebox");
 const overlay = getElement<HTMLDivElement>("overlay");
 const readout = {
   bpm: getElement<HTMLSpanElement>("bpm"),
@@ -39,7 +39,7 @@ async function run(): Promise<void> {
 
   startFrameLoop(video, (tSeconds, nowMs) => {
     const state = pipeline.update(video, tSeconds, nowMs);
-    renderFrame(canvas, video, state);
+    renderFaceBox(facebox, video, state);
     renderReadout(readout, state);
   });
 }
