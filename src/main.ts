@@ -3,6 +3,7 @@
  */
 
 import "./style.css";
+import { RingBuffer } from "./buffer";
 import { CameraError, openCamera, startFrameLoop } from "./capture";
 import { renderFrame, renderReadout } from "./display";
 import { FaceTracker } from "./face";
@@ -35,8 +36,10 @@ async function run(): Promise<void> {
   await openCamera(video);
 
   readout.status.textContent = "";
-  startFrameLoop(video, (_tSeconds, nowMs) => {
+  const buffer = new RingBuffer(10);
+  startFrameLoop(video, (tSeconds, nowMs) => {
     const detection = tracker.detect(video, nowMs);
+    if (detection !== null) buffer.append(detection.meanRgb, tSeconds);
     const state: State = {
       bbox: detection?.bbox ?? null,
       pulseSignal: new Float64Array(0),

@@ -1,15 +1,21 @@
 /**
- * Single-face detection via MediaPipe Tasks FaceLandmarker.
+ * Single-face detection and skin-ROI mean-RGB extraction via MediaPipe Tasks
+ * FaceLandmarker.
  *
  * Ports rppg/face.py. Wraps the browser FaceLandmarker (same
  * face_landmarker.task asset and landmark index space as the Python
  * FaceTracker) to locate one face per frame and reduce it to the compact
  * quantities the pipeline consumes: the bounding box from the min/max
- * landmark extent and the landmark centroid (a motion-stable anchor for the
- * confidence score, since the bbox extent jitters frame to frame).
+ * landmark extent, the mean (R, G, B) over a skin region of interest
+ * (forehead plus both cheeks, the exact landmark groups of the Python), and
+ * the landmark centroid (a motion-stable anchor for the confidence score,
+ * since the bbox extent jitters frame to frame).
  *
- * The geometry helpers (bboxFromPoints, centroidFromPoints) are pure and
- * unit-testable without a camera, mirroring the Python module-level helpers.
+ * The ROI mask is the union of the filled convex hulls of the landmark
+ * groups, sampled on an offscreen canvas at reduced resolution. The geometry
+ * helpers (bboxFromPoints, centroidFromPoints, convexHull, meanRgbOfMasked)
+ * are pure and unit-testable without a camera, mirroring the Python
+ * module-level helpers.
  */
 
 import { FaceLandmarker, FilesetResolver } from "@mediapipe/tasks-vision";
@@ -23,6 +29,30 @@ const MODEL_URL =
 const WASM_BASE =
   "https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.35/wasm";
 
+// Face Mesh landmark indices for the skin regions used to sample
+// pulse-bearing colour, copied verbatim from rppg/face.py. The groups cover
+// well-perfused, mostly hairless skin while avoiding the eyes, eyebrows and
+// mouth, whose motion and pigment would corrupt the mean colour.
+export const FOREHEAD_LANDMARKS: readonly number[] = [
+  10, 67, 69, 104, 108, 151, 337, 299, 297, 338,
+];
+export const LEFT_CHEEK_LANDMARKS: readonly number[] = [
+  205, 50, 101, 118, 117, 123, 147, 187,
+];
+export const RIGHT_CHEEK_LANDMARKS: readonly number[] = [
+  425, 280, 330, 347, 346, 352, 376, 411,
+];
+
+export const ROI_LANDMARK_GROUPS: readonly (readonly number[])[] = [
+  FOREHEAD_LANDMARKS,
+  LEFT_CHEEK_LANDMARKS,
+  RIGHT_CHEEK_LANDMARKS,
+];
+
+// The ROI is sampled on an offscreen canvas whose longest side is capped, so
+// the per-frame getImageData + pixel scan stays cheap at any camera size.
+const SAMPLE_MAX_SIDE = 256;
+
 /** One (x, y) pixel coordinate. */
 export type Point = readonly [number, number];
 
@@ -30,6 +60,8 @@ export type Point = readonly [number, number];
 export interface FaceObservation {
   /** Face bounding box (x, y, w, h) in pixel coordinates. */
   readonly bbox: readonly [number, number, number, number];
+  /** Mean (R, G, B) over the skin ROI, each channel in [0, 255]. */
+  readonly meanRgb: readonly [number, number, number];
   /** Landmark centroid (cx, cy) in pixels — a motion-stable face anchor. */
   readonly center: readonly [number, number];
 }
@@ -84,12 +116,87 @@ export function centroidFromPoints(points: readonly Point[]): Point {
 }
 
 /**
- * Detect one face per video frame and extract its bounding box and centroid.
- * Browser counterpart of the Python FaceTracker (VIDEO running mode,
- * numFaces: 1).
+ * Convex hull of a point set (Andrew's monotone chain), counter-clockwise,
+ * without repeating the first point. The browser stand-in for cv2.convexHull;
+ * filling the hull as a canvas path is the cv2.fillConvexPoly equivalent.
+ */
+export function convexHull(points: readonly Point[]): Point[] {
+  const pts = [...points].sort((a, b) => a[0] - b[0] || a[1] - b[1]);
+  if (pts.length <= 2) return pts;
+
+  const cross = (o: Point, a: Point, b: Point): number =>
+    (a[0] - o[0]) * (b[1] - o[1]) - (a[1] - o[1]) * (b[0] - o[0]);
+
+  const lower: Point[] = [];
+  for (const p of pts) {
+    while (
+      lower.length >= 2 &&
+      cross(lower[lower.length - 2], lower[lower.length - 1], p) <= 0
+    ) {
+      lower.pop();
+    }
+    lower.push(p);
+  }
+
+  const upper: Point[] = [];
+  for (let i = pts.length - 1; i >= 0; i--) {
+    const p = pts[i];
+    while (
+      upper.length >= 2 &&
+      cross(upper[upper.length - 2], upper[upper.length - 1], p) <= 0
+    ) {
+      upper.pop();
+    }
+    upper.push(p);
+  }
+
+  lower.pop();
+  upper.pop();
+  return [...lower, ...upper];
+}
+
+/**
+ * Mean (R, G, B) over the fully opaque pixels of RGBA image data. The
+ * counterpart of mean_rgb_in_mask: the ROI canvas keeps only masked pixels
+ * opaque, so "alpha === 255" is the binary mask (partially transparent
+ * anti-aliased hull edges are excluded, matching the Python's hard-edged
+ * fillConvexPoly mask). Returns (0, 0, 0) when no pixel is selected.
+ */
+export function meanRgbOfMasked(
+  data: Uint8ClampedArray,
+): readonly [number, number, number] {
+  let r = 0;
+  let g = 0;
+  let b = 0;
+  let count = 0;
+  for (let i = 0; i < data.length; i += 4) {
+    if (data[i + 3] === 255) {
+      r += data[i];
+      g += data[i + 1];
+      b += data[i + 2];
+      count += 1;
+    }
+  }
+  if (count === 0) return [0, 0, 0];
+  return [r / count, g / count, b / count];
+}
+
+/**
+ * Detect one face per video frame and extract its bounding box, skin-ROI
+ * mean RGB and centroid. Browser counterpart of the Python FaceTracker
+ * (VIDEO running mode, numFaces: 1).
  */
 export class FaceTracker {
-  private constructor(private readonly landmarker: FaceLandmarker) {}
+  private readonly sampleCanvas = document.createElement("canvas");
+  private readonly sampleCtx: CanvasRenderingContext2D;
+
+  private constructor(private readonly landmarker: FaceLandmarker) {
+    const ctx = this.sampleCanvas.getContext("2d", {
+      willReadFrequently: true,
+    });
+    if (ctx === null) throw new Error("Could not create a 2D canvas context");
+    this.sampleCtx = ctx;
+  }
 
   static async create(): Promise<FaceTracker> {
     const fileset = await FilesetResolver.forVisionTasks(WASM_BASE);
@@ -115,7 +222,8 @@ export class FaceTracker {
     const width = video.videoWidth;
     const height = video.videoHeight;
 
-    // Box the whole face from the full landmark mesh, as the Python does.
+    // Box the whole face from the full landmark mesh, as the Python does; the
+    // ROI groups below only drive the colour mask, not the displayed box.
     const facePoints: Point[] = landmarks.map((lm) => [
       lm.x * width,
       lm.y * height,
@@ -123,7 +231,59 @@ export class FaceTracker {
     const bbox = bboxFromPoints(facePoints, width, height);
     const center = centroidFromPoints(facePoints);
 
-    return { bbox, center };
+    const meanRgb = this.roiMeanRgb(video, landmarks, width, height);
+
+    return { bbox, meanRgb, center };
+  }
+
+  /**
+   * Mean RGB over the union of the filled convex hulls of the ROI landmark
+   * groups, computed at reduced resolution. The _roi_mask + mean_rgb_in_mask
+   * equivalent: the frame is drawn to an offscreen canvas, then
+   * "destination-in" compositing erases everything outside the hull union, so
+   * one getImageData pass yields exactly the masked pixels.
+   */
+  private roiMeanRgb(
+    video: HTMLVideoElement,
+    landmarks: ReadonlyArray<{ x: number; y: number }>,
+    width: number,
+    height: number,
+  ): readonly [number, number, number] {
+    const scale = Math.min(1, SAMPLE_MAX_SIDE / Math.max(width, height));
+    const sw = Math.max(1, Math.round(width * scale));
+    const sh = Math.max(1, Math.round(height * scale));
+    if (this.sampleCanvas.width !== sw || this.sampleCanvas.height !== sh) {
+      this.sampleCanvas.width = sw;
+      this.sampleCanvas.height = sh;
+    }
+
+    const ctx = this.sampleCtx;
+    ctx.globalCompositeOperation = "source-over";
+    ctx.clearRect(0, 0, sw, sh);
+    ctx.drawImage(video, 0, 0, sw, sh);
+
+    const mask = new Path2D();
+    for (const group of ROI_LANDMARK_GROUPS) {
+      if (group.length < 3) continue;
+      const pts: Point[] = group.map((idx) => [
+        landmarks[idx].x * sw,
+        landmarks[idx].y * sh,
+      ]);
+      const hull = convexHull(pts);
+      if (hull.length < 3) continue;
+      mask.moveTo(hull[0][0], hull[0][1]);
+      for (let i = 1; i < hull.length; i++) {
+        mask.lineTo(hull[i][0], hull[i][1]);
+      }
+      mask.closePath();
+    }
+
+    ctx.globalCompositeOperation = "destination-in";
+    ctx.fill(mask);
+    ctx.globalCompositeOperation = "source-over";
+
+    const data = ctx.getImageData(0, 0, sw, sh).data;
+    return meanRgbOfMasked(data);
   }
 
   close(): void {
