@@ -1,0 +1,29 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>rPPG Demo — camera heart rate</title>
+    <link rel="stylesheet" href="/src/style.css" />
+  </head>
+  <body>
+    <main class="app">
+      <h1>rPPG Demo</h1>
+      <p class="subtitle">Heart rate from your webcam, estimated in-browser</p>
+      <div class="stage">
+        <video id="video" playsinline muted></video>
+        <canvas id="canvas" width="640" height="480"></canvas>
+        <div id="overlay" class="overlay" hidden></div>
+      </div>
+      <div class="readout">
+        <span id="bpm" class="bpm">—</span>
+        <span id="status" class="status">Loading…</span>
+      </div>
+      <p class="privacy">
+        All processing happens locally in your browser — no video is recorded or
+        uploaded.
+      </p>
+    </main>
+    <script type="module" src="/src/main.ts"></script>
+  </body>
+</html>
