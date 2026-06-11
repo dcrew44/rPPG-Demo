@@ -8,7 +8,7 @@ warming up) and the estimated heart rate in BPM.
 All processing happens locally in your browser — no video is recorded or
 uploaded.
 
-**Live demo:** _coming soon (GitHub Pages)_
+**Live demo:** https://dcrew44.github.io/rPPG-Demo/
 
 This is a TypeScript port of the [rPPG-App](https://github.com/dcrew44/rPPG-App)
 Python implementation, which is the ground-truth reference for all algorithms,
