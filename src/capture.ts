@@ -48,6 +48,20 @@ export async function openCamera(video: HTMLVideoElement): Promise<void> {
 }
 
 /**
+ * Play a looping media file in the given video element (the demo-clip
+ * stand-in for openCamera). Rejects when the file can't be loaded/decoded.
+ */
+export async function openClip(
+  video: HTMLVideoElement,
+  url: string,
+): Promise<void> {
+  video.srcObject = null;
+  video.src = url;
+  video.loop = true;
+  await video.play();
+}
+
+/**
  * Per-frame callback. `tSeconds` is the frame's media timestamp (the
  * pipeline's sample clock); `nowMs` is a monotonic wall-clock milliseconds
  * value (what MediaPipe's detectForVideo expects).

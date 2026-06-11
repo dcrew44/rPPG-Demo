@@ -54,7 +54,7 @@ h1 {
   border-radius: 12px;
   overflow: hidden;
   line-height: 0;
-  min-width: 480px;
+  min-width: min(480px, 100%);
   min-height: 360px;
   max-width: 100%;
 }
@@ -68,6 +68,51 @@ h1 {
   max-width: 100%;
   height: auto;
   transform: scaleX(-1);
+}
+
+/* Author `display: block` would beat the UA's [hidden] rule (same trap as
+   .overlay below), so re-hide explicitly for demo mode. */
+#video[hidden] {
+  display: none;
+}
+
+/* Demo mode has no video to size the stage, so size it explicitly (the
+   aspect ratio rules; drop the min-height so narrow screens stay 4:3). */
+.stage.demo {
+  width: min(640px, 100%);
+  aspect-ratio: 4 / 3;
+  min-height: 0;
+}
+
+/* The ROI overlay shares the video's coordinate space (viewBox = source
+   pixels) and its CSS mirror, so raw landmark coordinates land correctly. */
+.roi {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  transform: scaleX(-1);
+  pointer-events: none;
+  visibility: hidden;
+}
+
+.roi polygon {
+  fill: rgba(230, 232, 235, 0.08);
+  stroke: rgba(230, 232, 235, 0.55);
+  stroke-width: 1.5;
+  vector-effect: non-scaling-stroke;
+}
+
+.badge {
+  position: absolute;
+  top: 10px;
+  left: 10px;
+  padding: 2px 9px;
+  border-radius: 999px;
+  background: rgba(15, 17, 21, 0.7);
+  color: var(--muted);
+  font-size: 0.75rem;
+  line-height: 1.5;
 }
 
 .facebox {
@@ -90,6 +135,8 @@ h1 {
   position: absolute;
   inset: 0;
   display: flex;
+  flex-direction: column;
+  gap: 1rem;
   align-items: center;
   justify-content: center;
   padding: 2rem;
@@ -98,6 +145,25 @@ h1 {
   color: var(--muted);
   background: var(--card);
   font-size: 0.95rem;
+}
+
+.overlay p {
+  margin: 0;
+}
+
+.demo-btn {
+  padding: 0.5rem 1rem;
+  border: 1px solid var(--muted);
+  border-radius: 8px;
+  background: transparent;
+  color: var(--fg);
+  font: inherit;
+  font-size: 0.9rem;
+  cursor: pointer;
+}
+
+.demo-btn:hover {
+  background: rgba(230, 232, 235, 0.08);
 }
 
 .readout {
@@ -122,4 +188,84 @@ h1 {
   margin: 0.25rem 0 0;
   color: var(--muted);
   font-size: 0.8rem;
+}
+
+/* --- waveform & spectrum panels --- */
+
+.panels {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 0.75rem;
+  width: 100%;
+  margin-top: 0.25rem;
+}
+
+@media (max-width: 560px) {
+  .panels {
+    grid-template-columns: 1fr;
+  }
+}
+
+.panel {
+  background: var(--card);
+  border-radius: 12px;
+  padding: 0.6rem 0.75rem 0.5rem;
+}
+
+.panel-head {
+  display: flex;
+  justify-content: space-between;
+  gap: 0.5rem;
+  margin-bottom: 0.4rem;
+  font-size: 0.8rem;
+}
+
+.panel-note {
+  color: var(--muted);
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+.panel-plot {
+  display: block;
+  width: 100%;
+  height: 96px;
+}
+
+.midline {
+  stroke: rgba(230, 232, 235, 0.12);
+  stroke-width: 1;
+  vector-effect: non-scaling-stroke;
+}
+
+.trace {
+  fill: none;
+  stroke: var(--muted);
+  stroke-width: 1.5;
+  stroke-linejoin: round;
+  vector-effect: non-scaling-stroke;
+}
+
+.spectrace {
+  stroke: #7aa2f7;
+}
+
+.hrband {
+  fill: rgba(122, 162, 247, 0.1);
+}
+
+.peakline {
+  stroke: #eab308;
+  stroke-width: 1;
+  stroke-dasharray: 3 3;
+  vector-effect: non-scaling-stroke;
+  visibility: hidden;
+}
+
+.axis {
+  display: flex;
+  justify-content: space-between;
+  margin-top: 0.25rem;
+  color: var(--muted);
+  font-size: 0.7rem;
 }

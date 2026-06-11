@@ -4,20 +4,75 @@
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>rPPG Demo — camera heart rate</title>
+    <link
+      rel="icon"
+      href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'><text y='13' font-size='13'>🫀</text></svg>"
+    />
     <link rel="stylesheet" href="/src/style.css" />
   </head>
   <body>
     <main class="app">
       <h1>rPPG Demo</h1>
       <p class="subtitle">Heart rate from your webcam, estimated in-browser</p>
-      <div class="stage">
+      <div id="stage" class="stage">
         <video id="video" playsinline muted></video>
+        <!-- preserveAspectRatio="none" so the overlay stretches per-axis
+             exactly like the face-box div's scaleX/scaleY mapping. -->
+        <svg
+          id="roi"
+          class="roi"
+          viewBox="0 0 640 480"
+          preserveAspectRatio="none"
+          aria-hidden="true"
+        ></svg>
         <div id="facebox" class="facebox" hidden></div>
+        <div id="demobadge" class="badge" hidden>
+          Demo mode — synthetic pulse
+        </div>
         <div id="overlay" class="overlay" hidden></div>
       </div>
       <div class="readout">
         <span id="bpm" class="bpm">—</span>
         <span id="status" class="status">Loading…</span>
+      </div>
+      <div class="panels">
+        <section class="panel">
+          <div class="panel-head">
+            <span>Pulse waveform</span>
+            <span class="panel-note">POS · last 10 s</span>
+          </div>
+          <svg
+            class="panel-plot"
+            viewBox="0 0 100 40"
+            preserveAspectRatio="none"
+            aria-hidden="true"
+          >
+            <line class="midline" x1="0" y1="20" x2="100" y2="20" />
+            <polyline id="wavetrace" class="trace" />
+          </svg>
+        </section>
+        <section class="panel">
+          <div class="panel-head">
+            <span>Frequency spectrum</span>
+            <span id="peaklabel" class="panel-note">waiting for signal…</span>
+          </div>
+          <svg
+            class="panel-plot"
+            viewBox="0 0 100 40"
+            preserveAspectRatio="none"
+            aria-hidden="true"
+          >
+            <!-- 0.75–2.5 Hz HR band within the 0.5–4 Hz view. -->
+            <rect class="hrband" x="7.14" y="0" width="50" height="40" />
+            <polyline id="spectrace" class="trace spectrace" />
+            <line id="peakline" class="peakline" x1="0" x2="0" y1="0" y2="40" />
+          </svg>
+          <div class="axis">
+            <span>0.5 Hz</span>
+            <span>45–150 BPM band</span>
+            <span>4.0 Hz</span>
+          </div>
+        </section>
       </div>
       <p class="privacy">
         All processing happens locally in your browser — no video is recorded or

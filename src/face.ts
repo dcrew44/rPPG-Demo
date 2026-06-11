@@ -64,6 +64,9 @@ export interface FaceObservation {
   readonly meanRgb: readonly [number, number, number];
   /** Landmark centroid (cx, cy) in pixels — a motion-stable face anchor. */
   readonly center: readonly [number, number];
+  /** Convex hull of each ROI landmark group, in pixel coordinates — the
+   * exact regions the mean RGB is sampled from, for the display overlay. */
+  readonly roiPolygons: readonly (readonly Point[])[];
 }
 
 /**
@@ -231,9 +234,23 @@ export class FaceTracker {
     const bbox = bboxFromPoints(facePoints, width, height);
     const center = centroidFromPoints(facePoints);
 
-    const meanRgb = this.roiMeanRgb(video, landmarks, width, height);
+    // Hull each ROI group once in full-resolution pixels; the mask sampler
+    // below rescales these same hulls, so the overlay shows exactly the
+    // sampled regions.
+    const roiPolygons: Point[][] = [];
+    for (const group of ROI_LANDMARK_GROUPS) {
+      if (group.length < 3) continue;
+      const hull = convexHull(
+        group.map(
+          (idx): Point => [landmarks[idx].x * width, landmarks[idx].y * height],
+        ),
+      );
+      if (hull.length >= 3) roiPolygons.push(hull);
+    }
 
-    return { bbox, meanRgb, center };
+    const meanRgb = this.roiMeanRgb(video, roiPolygons, width, height);
+
+    return { bbox, meanRgb, center, roiPolygons };
   }
 
   /**
@@ -245,7 +262,7 @@ export class FaceTracker {
    */
   private roiMeanRgb(
     video: HTMLVideoElement,
-    landmarks: ReadonlyArray<{ x: number; y: number }>,
+    hulls: readonly (readonly Point[])[],
     width: number,
     height: number,
   ): readonly [number, number, number] {
@@ -262,18 +279,15 @@ export class FaceTracker {
     ctx.clearRect(0, 0, sw, sh);
     ctx.drawImage(video, 0, 0, sw, sh);
 
+    // Rescale the full-resolution hulls onto the sample canvas (convexity is
+    // preserved under the axis scaling).
+    const sx = sw / width;
+    const sy = sh / height;
     const mask = new Path2D();
-    for (const group of ROI_LANDMARK_GROUPS) {
-      if (group.length < 3) continue;
-      const pts: Point[] = group.map((idx) => [
-        landmarks[idx].x * sw,
-        landmarks[idx].y * sh,
-      ]);
-      const hull = convexHull(pts);
-      if (hull.length < 3) continue;
-      mask.moveTo(hull[0][0], hull[0][1]);
+    for (const hull of hulls) {
+      mask.moveTo(hull[0][0] * sx, hull[0][1] * sy);
       for (let i = 1; i < hull.length; i++) {
-        mask.lineTo(hull[i][0], hull[i][1]);
+        mask.lineTo(hull[i][0] * sx, hull[i][1] * sy);
       }
       mask.closePath();
     }

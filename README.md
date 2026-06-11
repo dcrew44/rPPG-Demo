@@ -1,14 +1,22 @@
 # rPPG Demo
 
 Estimate heart rate from your webcam, entirely in the browser, using remote
-photoplethysmography (rPPG). A single live view shows the camera feed with a
-face box colored along a continuous red → yellow → green gradient by a
-confidence score (gray while warming up) and the estimated heart rate in BPM.
+photoplethysmography (rPPG). The live view shows the camera feed with the
+sampled skin regions outlined, a face box colored along a continuous
+red → yellow → green gradient by a confidence score (gray while warming up),
+the estimated heart rate in BPM, a scrolling pulse-waveform panel, and a
+frequency-spectrum panel with the detected heart-rate peak marked.
 
 All processing happens locally in your browser — no video is recorded or
 uploaded.
 
 **Live demo:** https://dcrew44.github.io/rPPG-Demo/
+
+No camera (or no permission)? [Demo mode](https://dcrew44.github.io/rPPG-Demo/?demo)
+plays a short recorded clip through the identical tracker + pipeline — it is
+also offered automatically when the camera can't be opened. If the clip or
+the face model can't load, it falls back to a synthetic pulse source
+(forceable with `?demo=synthetic`).
 
 This is a TypeScript port of the [rPPG-App](https://github.com/dcrew44/rPPG-App)
 Python implementation, which is the ground-truth reference for all algorithms,
@@ -56,8 +64,15 @@ camera → FaceTracker → RingBuffer (skin-ROI mean RGB) → POS → pulse
   band peak → parabolic interpolation (scipy-free reimplementation).
 - `src/confidence.ts` — SNR + motion composite score, EMA-smoothed, rendered
   as a continuous border gradient (recalibrated for the hr.ts periodogram).
-- `src/pipeline.ts` — orchestration: 5 s warm-up, ~0.5 s HR tick.
-- `src/display.ts` / `src/main.ts` — video preview + DOM face-box renderer and wiring.
+- `src/pipeline.ts` — orchestration: 5 s warm-up, ~0.5 s HR tick. The
+  camera-free `ingest()` entry point takes a face observation directly, so
+  demo mode and the integration tests run the identical math path.
+- `src/display.ts` / `src/main.ts` — video preview, ROI/face-box overlays
+  (SVG/DOM, canvas-free) and the waveform/spectrum panels; wiring.
+- `src/demo.ts` — the synthetic-pulse fallback for demo mode (PPG-like
+  waveform on a skin-tone mean RGB, gentle motion, seeded noise); the primary
+  demo path plays `public/demo.mp4` through the real tracker, accumulating a
+  timestamp offset at each loop wrap to keep the sample clock monotonic.
 
 ## Deploy
 

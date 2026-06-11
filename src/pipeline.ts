@@ -14,8 +14,8 @@ import {
   type ConfidenceResult,
   type Spectrum,
 } from "./confidence";
-import type { FaceTracker } from "./face";
-import { HREstimator } from "./hr";
+import type { FaceObservation, FaceTracker } from "./face";
+import { HREstimator, type HRAnalysis } from "./hr";
 import { posEstimate } from "./pos";
 import type { State } from "./state";
 
@@ -27,6 +27,7 @@ export class Pipeline {
   private readonly hrUpdateInterval: number;
   private lastHrT: number | null = null;
   private lastBpm: number | null = null;
+  private lastAnalysis: HRAnalysis | null = null;
   private lastPulse: Float64Array = new Float64Array(0);
   private lastConf: ConfidenceResult = {
     score: null,
@@ -35,7 +36,7 @@ export class Pipeline {
   };
 
   constructor(
-    private readonly faceTracker: FaceTracker,
+    private readonly faceTracker: FaceTracker | null,
     {
       windowSeconds = 10,
       minSeconds = 5,
@@ -57,8 +58,15 @@ export class Pipeline {
    * monotonic milliseconds timestamp MediaPipe's VIDEO mode requires.
    */
   update(video: HTMLVideoElement, t: number, nowMs: number): State {
-    const detection = this.faceTracker.detect(video, nowMs);
+    return this.ingest(this.faceTracker?.detect(video, nowMs) ?? null, t);
+  }
 
+  /**
+   * Process one face observation (or a no-face frame) at sample time `t`.
+   * The camera-free core of update(): demo mode and tests feed synthetic
+   * observations through here, so the math path is identical.
+   */
+  ingest(detection: FaceObservation | null, t: number): State {
     if (detection !== null) {
       this.scorer.observeFrame(detection.center, detection.bbox);
       this.buffer.append(detection.meanRgb, t);
@@ -75,6 +83,8 @@ export class Pipeline {
       hasFace: detection !== null,
       confidence: this.lastConf.score,
       confidenceColor: this.lastConf.colorBand,
+      roiPolygons: detection?.roiPolygons ?? [],
+      spectrum: this.lastAnalysis,
     };
   }
 
@@ -95,6 +105,7 @@ export class Pipeline {
     let spectrum: Spectrum | null = null;
     if (analysis !== null) {
       this.lastBpm = analysis.bpm;
+      this.lastAnalysis = analysis;
       spectrum = analysis;
     }
     // First tick has no prior timestamp: seed dt with the nominal update
@@ -105,6 +116,6 @@ export class Pipeline {
   }
 
   close(): void {
-    this.faceTracker.close();
+    this.faceTracker?.close();
   }
 }
