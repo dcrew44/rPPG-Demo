@@ -2,8 +2,8 @@
 
 Estimate heart rate from your webcam, entirely in the browser, using remote
 photoplethysmography (rPPG). A single live view shows the camera feed with a
-face box colored red / yellow / green by a confidence score (gray while
-warming up) and the estimated heart rate in BPM.
+face box colored along a continuous red → yellow → green gradient by a
+confidence score (gray while warming up) and the estimated heart rate in BPM.
 
 All processing happens locally in your browser — no video is recorded or
 uploaded.
@@ -54,8 +54,8 @@ camera → FaceTracker → RingBuffer (skin-ROI mean RGB) → POS → pulse
   2×3 projection, alpha tuning.
 - `src/hr.ts` — heart-rate estimator: detrend → Hann → FFT → 0.75–2.5 Hz
   band peak → parabolic interpolation (scipy-free reimplementation).
-- `src/confidence.ts` — SNR + motion composite score, EMA-smoothed, mapped
-  to the color band with hysteresis.
+- `src/confidence.ts` — SNR + motion composite score, EMA-smoothed, rendered
+  as a continuous border gradient (recalibrated for the hr.ts periodogram).
 - `src/pipeline.ts` — orchestration: 5 s warm-up, ~0.5 s HR tick.
 - `src/display.ts` / `src/main.ts` — video preview + DOM face-box renderer and wiring.
 

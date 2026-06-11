@@ -76,6 +76,7 @@ h1 {
   border: 3px solid #9aa0a8;
   border-radius: 2px;
   pointer-events: none;
+  transition: border-color 0.3s ease;
 }
 
 /* `display: flex` would override the UA's `[hidden] { display: none }`

@@ -1,4 +1,5 @@
-// Port of rPPG-App tests/test_confidence.py.
+// Port of rPPG-App tests/test_confidence.py, with the mapping tables updated
+// for this port's recalibrated constants (see src/confidence.ts's header).
 
 import { describe, expect, it } from "vitest";
 
@@ -13,6 +14,7 @@ import {
   W_SNR,
   type Spectrum,
 } from "../src/confidence";
+import { HREstimator } from "../src/hr";
 
 /** rfftfreq equivalent: bins k * fps / n for k = 0..n/2. */
 function rfftfreq(n: number, fps: number): Float64Array {
@@ -80,10 +82,10 @@ describe("snrDb", () => {
 
 describe("snrTo01", () => {
   it.each([
-    [-6.0, 0.0],
-    [0.0, 0.4],
-    [4.5, 0.7],
-    [9.0, 1.0],
+    [-5.0, 0.0],
+    [0.0, 0.5],
+    [2.5, 0.75],
+    [5.0, 1.0],
     [20.0, 1.0],
     [-20.0, 0.0],
     [-Infinity, 0.0],
@@ -95,16 +97,16 @@ describe("snrTo01", () => {
 describe("motionTo01", () => {
   it("is 1 inside the deadband", () => {
     expect(motionTo01(0)).toBe(1);
-    expect(motionTo01(0.004)).toBe(1);
+    expect(motionTo01(0.008)).toBe(1);
   });
 
   it("decays exponentially past the deadband", () => {
-    // deadband 0.004; k=100 -> exp(-100*(0.014-0.004)) = exp(-1) ~ 0.368
-    expect(motionTo01(0.014)).toBeCloseTo(0.368, 2);
+    // deadband 0.008; k=50 -> exp(-50*(0.028-0.008)) = exp(-1) ~ 0.368
+    expect(motionTo01(0.028)).toBeCloseTo(0.368, 2);
   });
 
   it("is near zero for large motion", () => {
-    expect(motionTo01(0.07)).toBeLessThan(0.01);
+    expect(motionTo01(0.11)).toBeLessThan(0.01);
   });
 });
 
@@ -149,6 +151,42 @@ describe("nextBand", () => {
       expect(nextBand(conf, current)).toBe(expected);
     },
   );
+});
+
+describe("calibration against the hr.ts periodogram", () => {
+  // Deterministic uniform [0, 1) PRNG so the spectrum is reproducible.
+  function mulberry32(seed: number): () => number {
+    return () => {
+      seed = (seed + 0x6d2b79f5) | 0;
+      let t = Math.imul(seed ^ (seed >>> 15), 1 | seed);
+      t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t;
+      return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+    };
+  }
+
+  // The full steady-state window: 10 s of a clean 1.2 Hz pulse at 30 fps
+  // with mild broadband noise — the signal the SNR ramp is calibrated for.
+  const fps = 30;
+  const rand = mulberry32(1234);
+  const signal = Float64Array.from({ length: 10 * fps }, (_, i) => {
+    const t = i / fps;
+    return Math.sin(2 * Math.PI * 1.2 * t) + 0.5 * (rand() - 0.5);
+  });
+  const analysis = new HREstimator().analyze(signal, fps)!;
+
+  it("scores a clean pulse high on the raw Hann periodogram", () => {
+    const { freqs, psd, fPeak } = analysis;
+    expect(fPeak).toBeCloseTo(1.2, 1);
+    expect(snrDb(freqs, psd, fPeak)).toBeGreaterThanOrEqual(3);
+    expect(snrTo01(snrDb(freqs, psd, fPeak))).toBeGreaterThanOrEqual(0.8);
+  });
+
+  it("needs the widened dev: a +/-0.1 Hz window leaks the peak's own Hann lobe into noise", () => {
+    const { freqs, psd, fPeak } = analysis;
+    expect(snrDb(freqs, psd, fPeak, 0.2)).toBeGreaterThan(
+      snrDb(freqs, psd, fPeak, 0.1),
+    );
+  });
 });
 
 const STILL_BBOX = [50, 50, 100, 100] as const;

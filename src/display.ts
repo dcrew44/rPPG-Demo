@@ -9,16 +9,42 @@
  * hardware-decode setups. The video is mirrored (selfie view) purely in CSS,
  * so the box's x is flipped here to match; all processing upstream sees the
  * unmirrored frame.
+ *
+ * Deviation from display.py: the border is not the discrete band color but a
+ * continuous red -> yellow -> green ramp over the smoothed confidence score,
+ * anchored at the band thresholds (gray when there is no estimate).
  */
 
-import type { ColorBand, State } from "./state";
+import { BAND_LO, BAND_HI } from "./confidence";
+import type { State } from "./state";
 
-const BAND_COLORS: Record<ColorBand, string> = {
-  gray: "#9aa0a8",
-  red: "#ef4444",
-  yellow: "#eab308",
-  green: "#22c55e",
-};
+const GRAY = "#9aa0a8";
+
+type Rgb = readonly [number, number, number];
+const RED: Rgb = [239, 68, 68]; // #ef4444
+const YELLOW: Rgb = [234, 179, 8]; // #eab308
+const GREEN: Rgb = [34, 197, 94]; // #22c55e
+
+function lerpRgb(a: Rgb, b: Rgb, t: number): string {
+  const c = a.map((v, i) => Math.round(v + (b[i] - v) * t));
+  return `rgb(${c[0]}, ${c[1]}, ${c[2]})`;
+}
+
+/**
+ * Map a confidence score to a CSS color: gray when null, otherwise a
+ * piecewise-linear sRGB ramp red -> yellow -> green anchored at BAND_LO,
+ * the band midpoint, and BAND_HI (pure red/green outside the band edges).
+ */
+export function confidenceColor(score: number | null): string {
+  if (score === null) return GRAY;
+  const mid = (BAND_LO + BAND_HI) / 2;
+  if (score <= BAND_LO) return lerpRgb(RED, YELLOW, 0);
+  if (score < mid)
+    return lerpRgb(RED, YELLOW, (score - BAND_LO) / (mid - BAND_LO));
+  if (score < BAND_HI)
+    return lerpRgb(YELLOW, GREEN, (score - mid) / (BAND_HI - mid));
+  return lerpRgb(YELLOW, GREEN, 1);
+}
 
 export interface Readout {
   readonly bpm: HTMLElement;
@@ -48,7 +74,7 @@ export function renderFaceBox(
   facebox.style.top = `${y * scaleY}px`;
   facebox.style.width = `${w * scaleX}px`;
   facebox.style.height = `${h * scaleY}px`;
-  facebox.style.borderColor = BAND_COLORS[state.confidenceColor];
+  facebox.style.borderColor = confidenceColor(state.confidence);
   facebox.hidden = false;
 }
 

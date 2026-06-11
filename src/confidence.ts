@@ -1,10 +1,26 @@
 /**
  * Composite per-session confidence score for the rPPG face box.
  *
- * Verbatim port of rppg/confidence.py: a two-factor quality score in [0, 1]
+ * Port of rppg/confidence.py: a two-factor quality score in [0, 1]
  * — spectral SNR and head motion — combined via a weighted geometric mean,
  * EMA-smoothed, and mapped to a red/yellow/green box color with hysteresis.
  * Visual indicator only; the heart-rate path is untouched.
+ *
+ * Deviates from the Python in calibration only (the structure is unchanged).
+ * The Python scores a Welch PSD of a Butterworth band-passed pulse; this port
+ * scores hr.ts's single raw Hann periodogram (see hr.ts's header). Hence:
+ * SNR_DEV_HZ widens 0.1 -> 0.2 to match the Hann main-lobe half-width (2/T)
+ * of the 10 s steady-state window, so the peak's own lobe is not counted as
+ * noise (kept fixed rather than adaptive to the 5-10 s warm-up window — a
+ * wider dev at short windows lets flat noise score as signal); and with no
+ * band-pass pre-attenuating noise inside the 0.7-4.0 Hz SNR band, the dB
+ * ramp re-centers from -6..9 to -5..5 (-5 dB is what a flat spectrum scores
+ * under dev=0.2, i.e. pure noise maps to 0). The motion knee softens
+ * (k 100 -> 50, deadband 0.004 -> 0.008) so landmark-centroid jitter while
+ * sitting still scores near 1 and the half-score point sits at ~2% of the
+ * face diagonal per frame (deliberate head motion). The color band is still
+ * computed per the Python, but display.ts renders the box border as a
+ * continuous gradient from the smoothed score.
  *
  * The mapping math lives in pure, camera-free module functions; only
  * ConfidenceScorer holds running state.
@@ -13,10 +29,10 @@
 import type { ColorBand } from "./state";
 
 // --- SNR -------------------------------------------------------------------
-export const SNR_DEV_HZ = 0.1;
+export const SNR_DEV_HZ = 0.2;
 export const SNR_BAND_HZ: readonly [number, number] = [0.7, 4.0];
-export const SNR_DB_MIN = -6.0;
-export const SNR_DB_MAX = 9.0;
+export const SNR_DB_MIN = -5.0;
+export const SNR_DB_MAX = 5.0;
 export const SNR_DB_CAP = 10.0;
 
 /** Spectrum handed from HREstimator.analyze() to the scorer. */
@@ -70,8 +86,8 @@ export function snrTo01(
 }
 
 // --- motion ------------------------------------------------------------------
-export const MOTION_K = 100.0;
-export const MOTION_DEADBAND = 0.004;
+export const MOTION_K = 50.0;
+export const MOTION_DEADBAND = 0.008;
 // Per-frame displacement cap applied by ConfidenceScorer.
 export const MOTION_WINSOR = 0.2;
 // Min box diagonal (px) used by ConfidenceScorer to normalize.
