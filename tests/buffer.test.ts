@@ -115,4 +115,15 @@ describe("RingBuffer", () => {
     buf.append(Float64Array.from([1, 2, 3]), 0);
     expect(buf.asArrays().rgb).toEqual([[1, 2, 3]]);
   });
+
+  it("clear drops all samples", () => {
+    const buf = new RingBuffer(10);
+    for (let i = 0; i < 5; i++) buf.append([i, i, i], i);
+    buf.clear();
+    expect(buf.length).toBe(0);
+    expect(buf.duration()).toBe(0);
+    expect(buf.fps()).toBe(0);
+    buf.append([1, 1, 1], 100);
+    expect(buf.length).toBe(1);
+  });
 });

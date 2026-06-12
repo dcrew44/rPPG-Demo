@@ -12,8 +12,15 @@
 /** Raised when the camera cannot be opened; message is user-presentable. */
 export class CameraError extends Error {}
 
-/** Open the user-facing camera into the given (hidden) video element. */
-export async function openCamera(video: HTMLVideoElement): Promise<void> {
+/**
+ * Open a camera into the given (hidden) video element: a specific device
+ * when `deviceId` is given (the camera picker), the user-facing default
+ * otherwise.
+ */
+export async function openCamera(
+  video: HTMLVideoElement,
+  deviceId?: string,
+): Promise<void> {
   if (!navigator.mediaDevices?.getUserMedia) {
     throw new CameraError(
       "Camera access (getUserMedia) is not available in this browser. " +
@@ -24,7 +31,9 @@ export async function openCamera(video: HTMLVideoElement): Promise<void> {
   try {
     stream = await navigator.mediaDevices.getUserMedia({
       video: {
-        facingMode: "user",
+        ...(deviceId === undefined
+          ? { facingMode: "user" }
+          : { deviceId: { exact: deviceId } }),
         width: { ideal: 640 },
         height: { ideal: 480 },
       },
@@ -45,6 +54,25 @@ export async function openCamera(video: HTMLVideoElement): Promise<void> {
   }
   video.srcObject = stream;
   await video.play();
+}
+
+/** Stop the video element's current camera stream (if any). */
+export function stopStream(video: HTMLVideoElement): void {
+  const stream = video.srcObject;
+  if (stream instanceof MediaStream) {
+    for (const track of stream.getTracks()) track.stop();
+  }
+  video.srcObject = null;
+}
+
+/**
+ * The available video-input devices. Labels are only populated once camera
+ * permission has been granted, so call this after openCamera resolves.
+ */
+export async function listCameras(): Promise<MediaDeviceInfo[]> {
+  if (!navigator.mediaDevices?.enumerateDevices) return [];
+  const devices = await navigator.mediaDevices.enumerateDevices();
+  return devices.filter((d) => d.kind === "videoinput");
 }
 
 /**

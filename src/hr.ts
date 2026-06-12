@@ -5,13 +5,16 @@
  * radix-2 FFT magnitude (zero-padded to the next power of two) → dominant
  * peak restricted to the heart-rate band → parabolic interpolation of the
  * peak → BPM. The Python's Butterworth band-pass + Welch PSD are replaced by
- * the band-restricted peak search over a single periodogram, which serves
- * the same purpose: out-of-band components (including the second harmonic of
- * any rate below 120 bpm) can never win the peak.
+ * the band-restricted peak search over a single periodogram.
  *
- * The default 0.75–2.5 Hz (45–150 bpm) band is copied from the Python and is
- * deliberately narrow — a wider upper edge admits the second harmonic of any
- * heart rate below 120 bpm, reporting double the true rate.
+ * Deviation from the Python's 0.75–2.5 Hz band: the band here is
+ * 0.75–3.3 Hz (45–198 bpm) so elevated (e.g. post-exercise) rates are
+ * readable. The Python kept the band narrow because a wider upper edge
+ * admits the second harmonic of rates below 120 bpm; instead of capping the
+ * band, analyze() checks each winning peak against its own subharmonic —
+ * when the spectrum holds comparable power at half the peak frequency, the
+ * peak is taken to be a second harmonic and the half-rate fundamental is
+ * reported.
  *
  * analyze() returns the spectrum alongside the BPM, mirroring the Python, so
  * the confidence score can compute its SNR without a second FFT.
@@ -127,11 +130,63 @@ export function interpolatePeak(
   return freqs[peak] + offset * binWidth;
 }
 
+// Subharmonic (second-harmonic rejection) check: half-width of the lobe
+// summed around the peak and its subharmonic (matches confidence.ts's
+// SNR_DEV_HZ, the Hann main-lobe half-width of the 10 s window), and the
+// minimum subharmonic/peak power ratio at which the half-rate wins. The 0.1
+// floor sits well above the in-window noise share of any usable signal but
+// below the fundamental of even a strongly harmonic-dominated pulse.
+export const SUBHARMONIC_DEV_HZ = 0.2;
+export const SUBHARMONIC_MIN_RATIO = 0.1;
+
+/** Sum of psd over bins within ±dev of f0 (restricted to [lo, hi]). */
+function lobePower(
+  freqs: Float64Array,
+  psd: Float64Array,
+  f0: number,
+  dev: number,
+): number {
+  let sum = 0;
+  for (let i = 0; i < freqs.length; i++) {
+    if (Math.abs(freqs[i] - f0) <= dev) sum += psd[i];
+  }
+  return sum;
+}
+
+/**
+ * Median-of-recent-estimates smoother for the displayed BPM. The raw
+ * periodogram peak can flick between neighbouring spectral candidates from
+ * one HR tick to the next; a short median rejects single-tick outliers while
+ * following a persistent change within ~windowSize/2 ticks. Display-side
+ * only — the spectrum/peak in State stay raw.
+ */
+export class BpmSmoother {
+  private readonly recent: number[] = [];
+
+  constructor(private readonly windowSize: number = 5) {}
+
+  /** Add a raw estimate and return the median of the recent window. */
+  push(bpm: number): number {
+    this.recent.push(bpm);
+    if (this.recent.length > this.windowSize) this.recent.shift();
+    const sorted = [...this.recent].sort((a, b) => a - b);
+    const mid = sorted.length >> 1;
+    return sorted.length % 2 === 1
+      ? sorted[mid]
+      : (sorted[mid - 1] + sorted[mid]) / 2;
+  }
+
+  /** Forget all history (new session or buffer reset). */
+  reset(): void {
+    this.recent.length = 0;
+  }
+}
+
 /** Estimate heart rate (BPM) from a 1-D pulse waveform. */
 export class HREstimator {
   constructor(
     private readonly lowHz: number = 0.75,
-    private readonly highHz: number = 2.5,
+    private readonly highHz: number = 3.3,
   ) {}
 
   /**
@@ -170,6 +225,23 @@ export class HREstimator {
       if (peak === -1 || psd[k] > psd[peak]) peak = k;
     }
     if (peak === -1) return null;
+
+    // Second-harmonic rejection: when the winning peak's subharmonic also
+    // lies in band and carries comparable power, the peak is the second
+    // harmonic of that lower rate — report the fundamental instead.
+    const fHalf = freqs[peak] / 2;
+    if (fHalf >= this.lowHz) {
+      const peakPower = lobePower(freqs, psd, freqs[peak], SUBHARMONIC_DEV_HZ);
+      const subPower = lobePower(freqs, psd, fHalf, SUBHARMONIC_DEV_HZ);
+      if (subPower >= SUBHARMONIC_MIN_RATIO * peakPower) {
+        let sub = -1;
+        for (let k = 0; k < bins; k++) {
+          if (Math.abs(freqs[k] - fHalf) > SUBHARMONIC_DEV_HZ) continue;
+          if (sub === -1 || psd[k] > psd[sub]) sub = k;
+        }
+        if (sub !== -1) peak = sub;
+      }
+    }
 
     const fPeak = interpolatePeak(freqs, psd, peak);
     return { bpm: fPeak * 60, freqs, psd, fPeak };

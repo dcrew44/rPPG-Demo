@@ -4,10 +4,34 @@ import { describe, expect, it } from "vitest";
 
 import {
   confidenceColor,
+  GATE_CONFIDENCE,
+  gateBpm,
   hzToX,
+  qualityHint,
   spectrumPoints,
+  trendPoints,
+  trendRange,
   waveformPoints,
 } from "../src/display";
+import type { State } from "../src/state";
+
+/** A baseline healthy State for the gating/hint helpers. */
+function makeState(over: Partial<State> = {}): State {
+  return {
+    bbox: [100, 100, 200, 250],
+    pulseSignal: new Float64Array(0),
+    bpm: 70,
+    hasFace: true,
+    confidence: 0.8,
+    confidenceColor: "green",
+    confidenceComponents: { snr: 0.8, motion: 0.9, quality: 0.84 },
+    warmupProgress: null,
+    bpmTrend: [],
+    roiPolygons: [],
+    spectrum: null,
+    ...over,
+  };
+}
 
 describe("confidenceColor", () => {
   it("is gray when there is no estimate", () => {
@@ -141,5 +165,122 @@ describe("spectrumPoints", () => {
     const pts = parsePoints(spectrumPoints(freqs, psd));
     const [peakX] = pts.reduce((a, b) => (b[1] < a[1] ? b : a));
     expect(peakX).toBeCloseTo(hzToX(1.2), 1);
+  });
+});
+
+describe("gateBpm", () => {
+  it("passes the live value through at good confidence", () => {
+    expect(gateBpm(72, 0.8, 65)).toEqual({ shown: 72, held: false });
+  });
+
+  it("holds the last good value below the gate", () => {
+    expect(gateBpm(140, GATE_CONFIDENCE - 0.05, 72)).toEqual({
+      shown: 72,
+      held: true,
+    });
+  });
+
+  it("holds when there is no confidence estimate (re-warming)", () => {
+    expect(gateBpm(72, null, 70)).toEqual({ shown: 70, held: true });
+  });
+
+  it("falls back to the live value when nothing was held yet", () => {
+    expect(gateBpm(95, 0.1, null)).toEqual({ shown: 95, held: true });
+  });
+
+  it("shows nothing without a BPM", () => {
+    expect(gateBpm(null, 0.9, 70)).toEqual({ shown: null, held: false });
+  });
+});
+
+describe("qualityHint", () => {
+  it("asks for a face first", () => {
+    expect(qualityHint(makeState({ hasFace: false, confidence: null }))).toBe(
+      "No face — face the camera",
+    );
+  });
+
+  it("reports warm-up progress", () => {
+    expect(qualityHint(makeState({ warmupProgress: 0.6 }))).toBe(
+      "Calibrating 60%",
+    );
+  });
+
+  it("is silent at good confidence", () => {
+    expect(qualityHint(makeState())).toBe("");
+  });
+
+  it("blames motion when motion is the weaker component", () => {
+    const state = makeState({
+      confidence: 0.2,
+      confidenceComponents: { snr: 0.7, motion: 0.1, quality: 0.2 },
+    });
+    expect(qualityHint(state)).toBe("Low confidence — hold still");
+  });
+
+  it("blames lighting when SNR is the weaker component", () => {
+    const state = makeState({
+      confidence: 0.2,
+      confidenceComponents: { snr: 0.1, motion: 0.9, quality: 0.2 },
+    });
+    expect(qualityHint(state)).toBe(
+      "Low confidence — try brighter, more even lighting",
+    );
+  });
+});
+
+describe("trendPoints / trendRange", () => {
+  it("is empty with fewer than two points", () => {
+    expect(trendPoints([])).toBe("");
+    expect(trendPoints([[0, 70]])).toBe("");
+    expect(trendRange([])).toBeNull();
+  });
+
+  it("stretches a short history across the full width", () => {
+    const trend: (readonly [number, number])[] = [
+      [0, 70],
+      [10, 72],
+      [20, 74],
+    ];
+    const pts = parsePoints(trendPoints(trend));
+    expect(pts).toHaveLength(3);
+    expect(pts[0][0]).toBe(0);
+    expect(pts[pts.length - 1][0]).toBe(100);
+  });
+
+  it("only plots points inside the window", () => {
+    const trend: (readonly [number, number])[] = [
+      [0, 200], // far outside the 120 s window — must not skew the scale
+      [200, 70],
+      [210, 72],
+    ];
+    const pts = parsePoints(trendPoints(trend));
+    expect(pts).toHaveLength(2);
+    expect(trendRange(trend)).toEqual([70, 72]);
+  });
+
+  it("keeps a flat trend near the midline with the minimum span", () => {
+    const trend: (readonly [number, number])[] = [
+      [0, 70],
+      [10, 70.5],
+      [20, 70],
+    ];
+    const ys = parsePoints(trendPoints(trend)).map(([, y]) => y);
+    for (const y of ys) {
+      expect(y).toBeGreaterThan(15);
+      expect(y).toBeLessThan(25);
+    }
+  });
+
+  it("stays inside the plot for a wide-ranging trend", () => {
+    const trend: (readonly [number, number])[] = [];
+    for (let i = 0; i <= 60; i++) {
+      trend.push([i * 2, 70 + 50 * Math.sin(i / 6)]);
+    }
+    const ys = parsePoints(trendPoints(trend)).map(([, y]) => y);
+    for (const y of ys) {
+      expect(y).toBeGreaterThanOrEqual(2);
+      expect(y).toBeLessThanOrEqual(38);
+    }
   });
 });

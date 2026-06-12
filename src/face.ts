@@ -20,14 +20,14 @@
 
 import { FaceLandmarker, FilesetResolver } from "@mediapipe/tasks-vision";
 
-// Same model asset the Python app downloads to models/face_landmarker.task.
-const MODEL_URL =
-  "https://storage.googleapis.com/mediapipe-models/face_landmarker/" +
-  "face_landmarker/float16/1/face_landmarker.task";
-
-// Pinned to the installed @mediapipe/tasks-vision version (see package.json).
-const WASM_BASE =
-  "https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.35/wasm";
+// Both assets are served from public/ rather than fetched from CDNs, so the
+// deployed demo is self-contained: the model is the same face_landmarker.task
+// the Python app downloads (committed to the repo), and the WASM runtime is
+// copied from the installed @mediapipe/tasks-vision package by
+// scripts/copy-wasm.mjs before every dev/build, so the two can never
+// version-skew.
+const MODEL_URL = `${import.meta.env.BASE_URL}models/face_landmarker.task`;
+const WASM_BASE = `${import.meta.env.BASE_URL}wasm`;
 
 // Face Mesh landmark indices for the skin regions used to sample
 // pulse-bearing colour, copied verbatim from rppg/face.py. The groups cover

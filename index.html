@@ -31,10 +31,18 @@
         </div>
         <div id="overlay" class="overlay" hidden></div>
       </div>
+      <div id="warmup" class="warmup" hidden>
+        <div id="warmbar" class="warmbar"></div>
+      </div>
       <div class="readout">
+        <span id="beat" class="beat" aria-hidden="true" hidden>♥</span>
         <span id="bpm" class="bpm">—</span>
         <span id="status" class="status">Loading…</span>
       </div>
+      <label id="camerarow" class="camerarow" hidden>
+        Camera
+        <select id="camerapick" class="camerapick"></select>
+      </label>
       <div class="panels">
         <section class="panel">
           <div class="panel-head">
@@ -62,16 +70,31 @@
             preserveAspectRatio="none"
             aria-hidden="true"
           >
-            <!-- 0.75–2.5 Hz HR band within the 0.5–4 Hz view. -->
-            <rect class="hrband" x="7.14" y="0" width="50" height="40" />
+            <!-- 0.75–3.3 Hz HR band within the 0.5–4 Hz view. -->
+            <rect class="hrband" x="7.14" y="0" width="72.86" height="40" />
             <polyline id="spectrace" class="trace spectrace" />
             <line id="peakline" class="peakline" x1="0" x2="0" y1="0" y2="40" />
           </svg>
           <div class="axis">
             <span>0.5 Hz</span>
-            <span>45–150 BPM band</span>
+            <span>45–198 BPM band</span>
             <span>4.0 Hz</span>
           </div>
+        </section>
+        <section class="panel panel-wide">
+          <div class="panel-head">
+            <span>Heart-rate trend</span>
+            <span id="trendlabel" class="panel-note">last 2 min</span>
+          </div>
+          <svg
+            class="panel-plot"
+            viewBox="0 0 100 40"
+            preserveAspectRatio="none"
+            aria-hidden="true"
+          >
+            <line class="midline" x1="0" y1="20" x2="100" y2="20" />
+            <polyline id="trendtrace" class="trace trendtrace" />
+          </svg>
         </section>
       </div>
       <p class="privacy">

@@ -29,6 +29,13 @@ export interface State {
   readonly confidence: number | null;
   /** Color band derived from the confidence score. */
   readonly confidenceColor: ColorBand;
+  /** Raw confidence sub-scores {snr, motion, quality} in [0, 1] — lets the
+   * UI say *why* confidence is low; empty when confidence is null. */
+  readonly confidenceComponents: Readonly<Record<string, number>>;
+  /** Buffer-fill fraction in [0, 1] while warming up, null once warm. */
+  readonly warmupProgress: number | null;
+  /** (t seconds, smoothed BPM) per HR tick over the recent trend window. */
+  readonly bpmTrend: readonly (readonly [number, number])[];
   /** Convex skin-ROI outlines in source-video pixels; empty without a face. */
   readonly roiPolygons: readonly (readonly Point[])[];
   /** Spectral analysis behind the latest BPM, or null before the first. */

@@ -7,13 +7,21 @@
  */
 
 import "./style.css";
-import { CameraError, openCamera, openClip, startFrameLoop } from "./capture";
+import {
+  CameraError,
+  listCameras,
+  openCamera,
+  openClip,
+  startFrameLoop,
+  stopStream,
+} from "./capture";
 import { DEMO_FPS, DEMO_HEIGHT, DEMO_WIDTH, DemoSignal } from "./demo";
 import {
+  ReadoutRenderer,
   renderFaceBox,
-  renderReadout,
   renderRoi,
   renderSpectrum,
+  renderTrend,
   renderWaveform,
   videoView,
   type ViewMetrics,
@@ -36,37 +44,96 @@ const roi = getElement<SVGSVGElement>("roi");
 const facebox = getElement<HTMLDivElement>("facebox");
 const demobadge = getElement<HTMLDivElement>("demobadge");
 const overlay = getElement<HTMLDivElement>("overlay");
-const readout = {
-  bpm: getElement<HTMLSpanElement>("bpm"),
-  status: getElement<HTMLSpanElement>("status"),
-};
+const bpmEl = getElement<HTMLSpanElement>("bpm");
+const statusEl = getElement<HTMLSpanElement>("status");
+const readout = new ReadoutRenderer({
+  bpm: bpmEl,
+  status: statusEl,
+  beat: getElement<HTMLSpanElement>("beat"),
+  warmup: getElement<HTMLDivElement>("warmup"),
+  warmbar: getElement<HTMLDivElement>("warmbar"),
+});
 const spectrumEls = {
   trace: getElement<SVGPolylineElement>("spectrace"),
   peakline: getElement<SVGLineElement>("peakline"),
   label: getElement<HTMLSpanElement>("peaklabel"),
 };
+const trendEls = {
+  trace: getElement<SVGPolylineElement>("trendtrace"),
+  label: getElement<HTMLSpanElement>("trendlabel"),
+};
 const wavetrace = getElement<SVGPolylineElement>("wavetrace");
+const camerarow = getElement<HTMLLabelElement>("camerarow");
+const camerapick = getElement<HTMLSelectElement>("camerapick");
 
 function renderAll(view: ViewMetrics, state: State): void {
   renderFaceBox(facebox, view, state);
   renderRoi(roi, view, state);
   renderWaveform(wavetrace, state);
   renderSpectrum(spectrumEls, state);
-  renderReadout(readout, state);
+  renderTrend(trendEls, state);
+  readout.render(state);
+}
+
+/**
+ * Offer a camera <select> when more than one camera exists. Labels are only
+ * available once permission is granted, so this runs after openCamera.
+ */
+async function setupCameraPicker(
+  onSwitch: (deviceId: string) => void,
+): Promise<void> {
+  const cameras = await listCameras();
+  if (cameras.length < 2) return;
+
+  camerapick.replaceChildren(
+    ...cameras.map((cam, i) => {
+      const opt = document.createElement("option");
+      opt.value = cam.deviceId;
+      opt.textContent = cam.label || `Camera ${i + 1}`;
+      return opt;
+    }),
+  );
+  const current =
+    video.srcObject instanceof MediaStream
+      ? video.srcObject.getVideoTracks()[0]?.getSettings().deviceId
+      : undefined;
+  if (current !== undefined) camerapick.value = current;
+  camerarow.hidden = false;
+  camerapick.addEventListener("change", () => onSwitch(camerapick.value));
 }
 
 async function runCamera(): Promise<void> {
-  readout.status.textContent = "Loading face model…";
+  statusEl.textContent = "Loading face model…";
   const tracker = await FaceTracker.create();
 
-  readout.status.textContent = "Waiting for camera permission…";
+  statusEl.textContent = "Waiting for camera permission…";
   await openCamera(video);
+  statusEl.textContent = "";
 
-  readout.status.textContent = "";
-  const pipeline = new Pipeline(tracker);
+  // The pipeline is rebuilt per stream: a new camera restarts the media
+  // timestamps (the sample clock), and its framing is a new subject anyway.
+  const startLoop = (): (() => void) => {
+    const pipeline = new Pipeline(tracker);
+    return startFrameLoop(video, (tSeconds, nowMs) => {
+      renderAll(videoView(video), pipeline.update(video, tSeconds, nowMs));
+    });
+  };
+  let stopLoop = startLoop();
 
-  startFrameLoop(video, (tSeconds, nowMs) => {
-    renderAll(videoView(video), pipeline.update(video, tSeconds, nowMs));
+  await setupCameraPicker((deviceId) => {
+    void (async () => {
+      stopLoop();
+      stopStream(video);
+      statusEl.textContent = "Switching camera…";
+      try {
+        await openCamera(video, deviceId);
+      } catch (err) {
+        showError(err);
+        return;
+      }
+      statusEl.textContent = "";
+      stopLoop = startLoop();
+    })();
   });
 }
 
@@ -80,13 +147,13 @@ async function runClipDemo(): Promise<void> {
   demobadge.textContent = "Demo mode — recorded clip";
   demobadge.hidden = false;
 
-  readout.status.textContent = "Loading face model…";
+  statusEl.textContent = "Loading face model…";
   const tracker = await FaceTracker.create();
 
-  readout.status.textContent = "Loading demo clip…";
+  statusEl.textContent = "Loading demo clip…";
   await openClip(video, DEMO_CLIP_URL);
 
-  readout.status.textContent = "";
+  statusEl.textContent = "";
   const pipeline = new Pipeline(tracker);
 
   // The clip loops, so its media timestamps restart at 0 every ~30 s; keep
@@ -108,8 +175,8 @@ function runSyntheticDemo(): void {
   stage.classList.add("demo");
   demobadge.textContent = "Demo mode — synthetic pulse";
   demobadge.hidden = false;
-  readout.status.textContent = "";
-  readout.bpm.textContent = "searching…";
+  statusEl.textContent = "";
+  bpmEl.textContent = "searching…";
 
   const pipeline = new Pipeline(null);
   const source = new DemoSignal();
@@ -166,8 +233,8 @@ function showError(err: unknown): void {
 
   overlay.replaceChildren(p, btn);
   overlay.hidden = false;
-  readout.status.textContent = "";
-  readout.bpm.textContent = "—";
+  statusEl.textContent = "";
+  bpmEl.textContent = "—";
 }
 
 const demoParam = new URLSearchParams(location.search).get("demo");

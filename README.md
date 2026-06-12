@@ -4,8 +4,14 @@ Estimate heart rate from your webcam, entirely in the browser, using remote
 photoplethysmography (rPPG). The live view shows the camera feed with the
 sampled skin regions outlined, a face box colored along a continuous
 red → yellow → green gradient by a confidence score (gray while warming up),
-the estimated heart rate in BPM, a scrolling pulse-waveform panel, and a
-frequency-spectrum panel with the detected heart-rate peak marked.
+the estimated heart rate in BPM with a heart icon beating at the detected
+rate, a scrolling pulse-waveform panel, a frequency-spectrum panel with the
+detected heart-rate peak marked, and a heart-rate trend panel over the last
+two minutes. The BPM readout is median-smoothed and confidence-gated — when
+the signal degrades (motion, poor lighting) it dims and holds the last good
+value, and the status line says what to fix. A warm-up bar shows the initial
+5 s buffer filling, and a camera picker appears when more than one camera is
+available.
 
 All processing happens locally in your browser — no video is recorded or
 uploaded.
@@ -35,8 +41,11 @@ npm run preview   # serve the production build locally
 npm run lint      # eslint + prettier check
 ```
 
-The MediaPipe face-landmark model (~3.8 MB) and its WASM runtime are fetched
-from CDNs on page load; everything else is static.
+The demo is fully self-contained — nothing is fetched from CDNs at runtime.
+The MediaPipe face-landmark model (~3.8 MB) is committed under
+`public/models/`, and the matching WASM runtime is copied out of the
+installed `@mediapipe/tasks-vision` package into `public/wasm/` (gitignored)
+before every dev run and build by `scripts/copy-wasm.mjs`.
 
 ## Architecture
 
@@ -52,7 +61,8 @@ camera → FaceTracker → RingBuffer (skin-ROI mean RGB) → POS → pulse
 ```
 
 - `src/capture.ts` — webcam + per-frame loop with real media timestamps
-  (`requestVideoFrameCallback`, rAF fallback).
+  (`requestVideoFrameCallback`, rAF fallback); camera enumeration for the
+  picker.
 - `src/face.ts` — MediaPipe Tasks `FaceLandmarker` (same model asset and
   landmark indices as the Python): face bbox, forehead+cheeks skin-ROI mean
   RGB via convex-hull masks, landmark centroid.
@@ -60,15 +70,23 @@ camera → FaceTracker → RingBuffer (skin-ROI mean RGB) → POS → pulse
   inter-sample interval.
 - `src/pos.ts` — POS (Wang et al. 2017): overlap-add 1.6·fps windows, fixed
   2×3 projection, alpha tuning.
-- `src/hr.ts` — heart-rate estimator: detrend → Hann → FFT → 0.75–2.5 Hz
-  band peak → parabolic interpolation (scipy-free reimplementation).
+- `src/hr.ts` — heart-rate estimator: detrend → Hann → FFT → 0.75–3.3 Hz
+  band peak → second-harmonic rejection (a peak whose subharmonic carries
+  comparable power yields to the half-rate fundamental) → parabolic
+  interpolation (scipy-free reimplementation); plus the median `BpmSmoother`
+  behind the displayed readout.
 - `src/confidence.ts` — SNR + motion composite score, EMA-smoothed, rendered
   as a continuous border gradient (recalibrated for the hr.ts periodogram).
-- `src/pipeline.ts` — orchestration: 5 s warm-up, ~0.5 s HR tick. The
-  camera-free `ingest()` entry point takes a face observation directly, so
-  demo mode and the integration tests run the identical math path.
+- `src/pipeline.ts` — orchestration: 5 s warm-up, ~0.5 s HR tick, (t, bpm)
+  trend history, and a sample-clock gap reset (>1.5 s without samples — a
+  hidden tab, camera switch or long face loss — clears the window and
+  re-warms instead of estimating across the discontinuity). The camera-free
+  `ingest()` entry point takes a face observation directly, so demo mode and
+  the integration tests run the identical math path.
 - `src/display.ts` / `src/main.ts` — video preview, ROI/face-box overlays
-  (SVG/DOM, canvas-free) and the waveform/spectrum panels; wiring.
+  (SVG/DOM, canvas-free), the waveform/spectrum/trend panels, and the
+  confidence-gated BPM readout (held + dimmed below the gate, with a
+  what-to-fix hint and a beating heart indicator); wiring.
 - `src/demo.ts` — the synthetic-pulse fallback for demo mode (PPG-like
   waveform on a skin-tone mean RGB, gentle motion, seeded noise); the primary
   demo path plays `public/demo.mp4` through the real tracker, accumulating a

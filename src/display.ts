@@ -15,12 +15,17 @@
  * Deviations from display.py: the border is a continuous red -> yellow ->
  * green ramp over the smoothed confidence (anchored at the band thresholds,
  * gray when there is no estimate) rather than the discrete band color, and
- * the waveform/spectrum/ROI views have no Python equivalent. The plot
- * geometry builders (waveformPoints, spectrumPoints, hzToX) are pure and
- * DOM-free for the tests.
+ * the waveform/spectrum/ROI/trend views have no Python equivalent. The BPM
+ * readout is confidence-gated purely on this side: below GATE_CONFIDENCE the
+ * last confidently-shown value is held and dimmed, so a garbage stretch
+ * (heavy motion, face half out of frame) never flashes a bogus number — the
+ * heart-rate path itself is untouched. The plot geometry builders
+ * (waveformPoints, spectrumPoints, hzToX, trendPoints) and the gating/hint
+ * helpers (gateBpm, qualityHint) are pure and DOM-free for the tests.
  */
 
 import { BAND_LO, BAND_HI } from "./confidence";
+import { TREND_WINDOW_S } from "./pipeline";
 import type { State } from "./state";
 
 const GRAY = "#9aa0a8";
@@ -71,11 +76,6 @@ export function videoView(video: HTMLVideoElement): ViewMetrics {
     clientWidth: video.clientWidth,
     clientHeight: video.clientHeight,
   };
-}
-
-export interface Readout {
-  readonly bpm: HTMLElement;
-  readonly status: HTMLElement;
 }
 
 /**
@@ -225,6 +225,56 @@ export function spectrumPoints(
   return pts.join(" ");
 }
 
+/**
+ * Polyline points for the BPM trend over the recent window. x spans the
+ * retained history (stretched to the full width while less than windowS has
+ * accumulated); y is auto-scaled to the plotted values with a minimum span,
+ * so a steady rate draws near the midline instead of magnifying jitter.
+ * Empty string with fewer than two points.
+ */
+export function trendPoints(
+  trend: readonly (readonly [number, number])[],
+  width: number = PLOT_W,
+  height: number = PLOT_H,
+  windowS: number = TREND_WINDOW_S,
+): string {
+  const range = trendRange(trend, windowS);
+  if (range === null) return "";
+  const [lo, hi] = range;
+
+  const tEnd = trend[trend.length - 1][0];
+  const tStart = Math.max(trend[0][0], tEnd - windowS);
+  if (tEnd <= tStart) return "";
+
+  const mid = (lo + hi) / 2;
+  const span = Math.max(hi - lo, 6); // >= ±3 bpm so flat trends stay calm
+  const pts: string[] = [];
+  for (const [t, bpm] of trend) {
+    if (t < tStart) continue;
+    const x = ((t - tStart) / (tEnd - tStart)) * width;
+    const y = height / 2 - ((bpm - mid) / span) * (height - 4);
+    pts.push(`${x.toFixed(2)},${y.toFixed(2)}`);
+  }
+  return pts.length >= 2 ? pts.join(" ") : "";
+}
+
+/** [min, max] BPM within the plotted trend window; null with <2 points. */
+export function trendRange(
+  trend: readonly (readonly [number, number])[],
+  windowS: number = TREND_WINDOW_S,
+): readonly [number, number] | null {
+  if (trend.length < 2) return null;
+  const tStart = trend[trend.length - 1][0] - windowS;
+  let lo = Infinity;
+  let hi = -Infinity;
+  for (const [t, bpm] of trend) {
+    if (t < tStart) continue;
+    if (bpm < lo) lo = bpm;
+    if (bpm > hi) hi = bpm;
+  }
+  return lo <= hi ? [lo, hi] : null;
+}
+
 /** Update the pulse-waveform trace, colored by the confidence score. */
 export function renderWaveform(trace: SVGPolylineElement, state: State): void {
   trace.setAttribute("points", waveformPoints(state.pulseSignal));
@@ -256,9 +306,107 @@ export function renderSpectrum(els: SpectrumElements, state: State): void {
   els.label.textContent = `peak ${fPeak.toFixed(2)} Hz → ${Math.round(bpm)} BPM`;
 }
 
-/** Update the BPM number and the status line beneath the video. */
-export function renderReadout(readout: Readout, state: State): void {
-  readout.bpm.textContent =
-    state.bpm === null ? "searching…" : `${Math.round(state.bpm)} BPM`;
-  readout.status.textContent = state.hasFace ? "" : "No face";
+export interface TrendElements {
+  readonly trace: SVGPolylineElement;
+  readonly label: HTMLElement;
+}
+
+/** Update the BPM-trend trace and its min–max range label. */
+export function renderTrend(els: TrendElements, state: State): void {
+  els.trace.setAttribute("points", trendPoints(state.bpmTrend));
+  const range = trendRange(state.bpmTrend);
+  els.label.textContent =
+    range === null
+      ? "last 2 min"
+      : `${Math.round(range[0])}–${Math.round(range[1])} BPM · last 2 min`;
+}
+
+/** Confidence floor below which the BPM readout holds its last good value. */
+export const GATE_CONFIDENCE = BAND_LO;
+
+/**
+ * Decide what the BPM readout shows. While confidence is acceptable the live
+ * value passes through; when it drops below GATE_CONFIDENCE (or there is no
+ * estimate at all, e.g. re-warming after a capture gap) the last
+ * confidently-shown value is held instead, flagged so the renderer dims it.
+ */
+export function gateBpm(
+  bpm: number | null,
+  confidence: number | null,
+  heldBpm: number | null,
+): { shown: number | null; held: boolean } {
+  if (bpm === null) return { shown: null, held: false };
+  if (confidence === null || confidence < GATE_CONFIDENCE) {
+    return { shown: heldBpm ?? bpm, held: true };
+  }
+  return { shown: bpm, held: false };
+}
+
+/**
+ * One-line guidance for the status slot, most actionable problem first: no
+ * face, still warming up, or — when confidence is low — whichever of motion
+ * and signal quality is dragging it down.
+ */
+export function qualityHint(state: State): string {
+  if (!state.hasFace) return "No face — face the camera";
+  if (state.warmupProgress !== null) {
+    return `Calibrating ${Math.round(state.warmupProgress * 100)}%`;
+  }
+  const c = state.confidence;
+  if (c === null || c >= GATE_CONFIDENCE) return "";
+  const { snr = 1, motion = 1 } = state.confidenceComponents;
+  return motion <= snr
+    ? "Low confidence — hold still"
+    : "Low confidence — try brighter, more even lighting";
+}
+
+export interface ReadoutElements {
+  readonly bpm: HTMLElement;
+  readonly status: HTMLElement;
+  readonly beat: HTMLElement;
+  readonly warmup: HTMLElement;
+  readonly warmbar: HTMLElement;
+}
+
+/**
+ * Stateful BPM readout: remembers the last confidently-shown value for
+ * gating, shows the warm-up fill, and beats the heart indicator at the
+ * displayed rate (paused and dimmed while the value is held).
+ */
+export class ReadoutRenderer {
+  private heldBpm: number | null = null;
+  private beatBpm: number | null = null;
+
+  constructor(private readonly els: ReadoutElements) {}
+
+  render(state: State): void {
+    const { shown, held } = gateBpm(state.bpm, state.confidence, this.heldBpm);
+    if (!held && shown !== null) this.heldBpm = shown;
+
+    this.els.bpm.textContent =
+      shown === null ? "searching…" : `${Math.round(shown)} BPM`;
+    this.els.bpm.classList.toggle("held", held);
+    this.els.status.textContent = qualityHint(state);
+
+    const progress = state.warmupProgress;
+    this.els.warmup.hidden = progress === null;
+    if (progress !== null) {
+      this.els.warmbar.style.width = `${(progress * 100).toFixed(0)}%`;
+    }
+
+    const beat = this.els.beat;
+    if (shown === null) {
+      beat.hidden = true;
+      this.beatBpm = null;
+      return;
+    }
+    beat.hidden = false;
+    beat.classList.toggle("held", held);
+    // Retiming the CSS animation resets its phase, so only do it when the
+    // rate has moved noticeably.
+    if (this.beatBpm === null || Math.abs(shown - this.beatBpm) >= 2) {
+      this.beatBpm = shown;
+      beat.style.animationDuration = `${(60 / shown).toFixed(3)}s`;
+    }
+  }
 }

@@ -4,3 +4,4 @@ dist/
 *.local
 .claude/
 *.mov
+public/wasm/

@@ -57,6 +57,12 @@ export class RingBuffer {
     return median === 0 ? 0 : 1 / median;
   }
 
+  /** Drop all samples (e.g. after a capture stall made the window stale). */
+  clear(): void {
+    this.times.length = 0;
+    this.samples.length = 0;
+  }
+
   /** Time span t[last] - t[first] in seconds; 0 with fewer than two samples. */
   duration(): number {
     if (this.times.length < 2) return 0;
