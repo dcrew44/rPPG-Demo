@@ -113,34 +113,34 @@ export function startFrameLoop(
   // typeof check (not `in`) so older browsers without the API fall through
   // without TypeScript narrowing `video` to never in the else branch.
   if (typeof video.requestVideoFrameCallback === "function") {
-    // iOS Safari can deliver camera frames whose metadata.mediaTime never
-    // advances, which freezes the pipeline's sample clock: the buffer never
-    // spans any duration and the warmup bar sits at "Calibrating 0%"
-    // forever. Probe the first few frames: once mediaTime moves, trust it
-    // for the life of the loop; if MEDIA_TIME_STALL_FRAMES frames arrive
-    // without movement, switch permanently to the callback timestamp,
-    // anchored at the frozen mediaTime so the sample clock stays continuous.
-    let clock: "probing" | "media" | "fallback" = "probing";
-    let firstMediaTime: number | null = null;
+    // iOS Safari camera streams can deliver frames whose metadata.mediaTime
+    // stops advancing — sometimes from the very first frame, sometimes only
+    // after running for a while — which freezes the pipeline's sample clock:
+    // the buffer never spans any duration and the warmup bar sits at
+    // "Calibrating 0%" forever. Any change counts as progress (a looping
+    // clip legitimately jumps backwards at the wrap); once
+    // MEDIA_TIME_STALL_FRAMES delivered frames carry an identical mediaTime,
+    // switch permanently to the callback timestamp, anchored at the frozen
+    // mediaTime so the sample clock stays continuous across the switch.
+    let fallbackBase: number | null = null;
+    let lastMediaTime: number | null = null;
     let stalledFrames = 0;
-    let fallbackBase = 0;
 
     const tick = (
       now: DOMHighResTimeStamp,
       metadata: VideoFrameCallbackMetadata,
     ): void => {
       if (stopped) return;
-      if (clock === "probing") {
-        firstMediaTime ??= metadata.mediaTime;
-        if (metadata.mediaTime > firstMediaTime) {
-          clock = "media";
+      if (fallbackBase === null) {
+        if (metadata.mediaTime !== lastMediaTime) {
+          lastMediaTime = metadata.mediaTime;
+          stalledFrames = 0;
         } else if (++stalledFrames >= MEDIA_TIME_STALL_FRAMES) {
-          clock = "fallback";
           fallbackBase = metadata.mediaTime - now / 1000;
         }
       }
       const t =
-        clock === "fallback" ? fallbackBase + now / 1000 : metadata.mediaTime;
+        fallbackBase === null ? metadata.mediaTime : fallbackBase + now / 1000;
       callback(t, now);
       video.requestVideoFrameCallback(tick);
     };

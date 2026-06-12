@@ -252,6 +252,13 @@ h1 {
   font-size: 0.9rem;
 }
 
+.debug {
+  color: var(--muted);
+  font-family: ui-monospace, monospace;
+  font-size: 0.8rem;
+  margin-top: 0.25rem;
+}
+
 .privacy {
   margin: 0.25rem 0 0;
   color: var(--muted);
