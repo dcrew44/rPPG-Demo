@@ -76,6 +76,21 @@ function renderAll(view: ViewMetrics, state: State): void {
 }
 
 /**
+ * With ?debug in the URL, a per-frame counter line under the readout for
+ * diagnosing capture problems on devices without devtools (phones): a frozen
+ * frame count means no frames are being delivered at all, a advancing count
+ * with frozen t means the sample clock is stuck.
+ */
+function makeDebugReadout(): HTMLDivElement | null {
+  if (!new URLSearchParams(location.search).has("debug")) return null;
+  const el = document.createElement("div");
+  el.className = "debug";
+  el.textContent = "debug: waiting for first frame…";
+  statusEl.closest(".readout")?.insertAdjacentElement("afterend", el);
+  return el;
+}
+
+/**
  * Offer a camera <select> when more than one camera exists. Labels are only
  * available once permission is granted, so this runs after openCamera.
  */
@@ -102,6 +117,14 @@ async function setupCameraPicker(
   camerapick.addEventListener("change", () => onSwitch(camerapick.value));
 }
 
+/** Frames must keep arriving while the page is visible; a gap this long
+ * means the capture has wedged (iOS Safari can bring the camera up frozen
+ * on a cold start) and the stream is reopened to recover. */
+const FRAME_STALL_RESTART_MS = 3000;
+
+/** Consecutive failed recoveries before giving up with an error. */
+const MAX_CAMERA_RESTARTS = 5;
+
 async function runCamera(): Promise<void> {
   statusEl.textContent = "Loading face model…";
   const tracker = await FaceTracker.create();
@@ -110,30 +133,92 @@ async function runCamera(): Promise<void> {
   await openCamera(video);
   statusEl.textContent = "";
 
+  const debugEl = makeDebugReadout();
+  let currentDeviceId: string | undefined;
+  let lastFrameAt = performance.now();
+  let frameCount = 0;
+
   // The pipeline is rebuilt per stream: a new camera restarts the media
   // timestamps (the sample clock), and its framing is a new subject anyway.
   const startLoop = (): (() => void) => {
     const pipeline = new Pipeline(tracker);
     return startFrameLoop(video, (tSeconds, nowMs) => {
-      renderAll(videoView(video), pipeline.update(video, tSeconds, nowMs));
+      lastFrameAt = performance.now();
+      const state = pipeline.update(video, tSeconds, nowMs);
+      renderAll(videoView(video), state);
+      if (debugEl !== null) {
+        frameCount += 1;
+        const warm = state.warmupProgress;
+        debugEl.textContent =
+          `frame ${frameCount} · t=${tSeconds.toFixed(2)}s · ` +
+          `warm=${warm === null ? "done" : (warm * 100).toFixed(0) + "%"} · ` +
+          `face=${state.hasFace ? "y" : "n"}`;
+      }
     });
   };
   let stopLoop = startLoop();
 
-  await setupCameraPicker((deviceId) => {
-    void (async () => {
+  // Reopen the stream and restart the loop (camera switch, stall recovery).
+  // `reopening` also parks the watchdog below while a reopen is in flight —
+  // and permanently once a reopen has failed and the error overlay is up.
+  let reopening = false;
+  const reopenCamera = async (status: string): Promise<void> => {
+    if (reopening) return;
+    reopening = true;
+    stopLoop();
+    stopStream(video);
+    statusEl.textContent = status;
+    try {
+      await openCamera(video, currentDeviceId);
+    } catch (err) {
+      showError(err);
+      return;
+    }
+    statusEl.textContent = "";
+    lastFrameAt = performance.now();
+    stopLoop = startLoop();
+    reopening = false;
+  };
+
+  // Watchdog: iOS Safari sometimes opens the camera in a wedged state where
+  // the <video> plays but no frames are ever delivered (so no frame callback
+  // fires and nothing downstream can detect it). Reopening the stream is the
+  // standard recovery — it's what a manual reload achieves.
+  let restarts = 0;
+  let lastRestartAt = -Infinity;
+  document.addEventListener("visibilitychange", () => {
+    // No frames arrive while hidden; grant a fresh grace period on return.
+    lastFrameAt = performance.now();
+  });
+  const watchdog = window.setInterval(() => {
+    if (reopening || document.visibilityState !== "visible") return;
+    const now = performance.now();
+    if (now - lastFrameAt < FRAME_STALL_RESTART_MS) {
+      // Healthy for a good while: forgive past restarts so a long session
+      // can recover from occasional stalls indefinitely.
+      if (now - lastRestartAt > 30_000) restarts = 0;
+      return;
+    }
+    restarts += 1;
+    lastRestartAt = now;
+    if (restarts > MAX_CAMERA_RESTARTS) {
+      window.clearInterval(watchdog);
       stopLoop();
       stopStream(video);
-      statusEl.textContent = "Switching camera…";
-      try {
-        await openCamera(video, deviceId);
-      } catch (err) {
-        showError(err);
-        return;
-      }
-      statusEl.textContent = "";
-      stopLoop = startLoop();
-    })();
+      showError(
+        new CameraError(
+          "The camera keeps stalling — no frames are arriving from it. " +
+            "Reload the page to try again.",
+        ),
+      );
+      return;
+    }
+    void reopenCamera("Camera stalled — restarting…");
+  }, 1000);
+
+  await setupCameraPicker((deviceId) => {
+    currentDeviceId = deviceId;
+    void reopenCamera("Switching camera…");
   });
 }
 

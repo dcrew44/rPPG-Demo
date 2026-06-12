@@ -1,6 +1,6 @@
 // startFrameLoop's requestVideoFrameCallback path, driven by a stub video.
 // Covers the iOS Safari workaround: camera streams whose metadata.mediaTime
-// never advances must not freeze the sample clock.
+// stops advancing must not freeze the sample clock.
 
 import { describe, expect, it } from "vitest";
 
@@ -59,32 +59,54 @@ describe("startFrameLoop (requestVideoFrameCallback)", () => {
     const total = MEDIA_TIME_STALL_FRAMES + 30;
     for (let i = 0; i < total; i++) fire(2000 + i * 33, 0);
 
-    // During the probe the frozen mediaTime is reported as-is…
-    for (let i = 0; i < MEDIA_TIME_STALL_FRAMES - 1; i++) expect(ts[i]).toBe(0);
-    // …then the clock advances at the callback rate, anchored so the switch
-    // itself introduces no jump.
-    expect(ts[MEDIA_TIME_STALL_FRAMES - 1]).toBe(0);
-    for (let i = MEDIA_TIME_STALL_FRAMES; i < total; i++) {
-      const sinceSwitch = (i - (MEDIA_TIME_STALL_FRAMES - 1)) * 33;
+    // Until the stall is recognized the frozen mediaTime is reported as-is
+    // (the switch itself is anchored, so it introduces no jump)…
+    for (let i = 0; i <= MEDIA_TIME_STALL_FRAMES; i++) expect(ts[i]).toBe(0);
+    // …then the clock advances at the callback rate.
+    for (let i = MEDIA_TIME_STALL_FRAMES + 1; i < total; i++) {
+      const sinceSwitch = (i - MEDIA_TIME_STALL_FRAMES) * 33;
       expect(ts[i]).toBeCloseTo(sinceSwitch / 1000, 10);
     }
     // Sanity: the clock spans real duration once fallen back.
     expect(ts[total - 1]).toBeGreaterThan(0.5);
   });
 
-  it("keeps trusting mediaTime once it has advanced, even through stalls", () => {
+  it("falls back when mediaTime freezes after advancing for a while", () => {
     const { video, fire } = makeRvfcVideo();
     const ts: number[] = [];
     startFrameLoop(video, (t) => ts.push(t));
 
-    fire(0, 0);
-    fire(33, 1 / 30); // mediaTime proves itself here
-    // A long run of repeated mediaTime (e.g. a paused clip) must not trigger
-    // the fallback clock afterwards.
-    for (let i = 0; i < MEDIA_TIME_STALL_FRAMES * 2; i++) {
-      fire(66 + i * 33, 1 / 30);
+    // Healthy for 5 frames, then frozen at the last good mediaTime.
+    for (let i = 0; i < 5; i++) fire(i * 33, i / 30);
+    const frozen = 4 / 30;
+    const total = 5 + MEDIA_TIME_STALL_FRAMES + 20;
+    for (let i = 5; i < total; i++) fire(i * 33, frozen);
+
+    // The stall run reports the frozen value until the switch (the switch
+    // frame itself is the re-anchored clock, equal up to float rounding)…
+    for (let i = 5; i <= 4 + MEDIA_TIME_STALL_FRAMES; i++) {
+      expect(ts[i]).toBeCloseTo(frozen, 10);
     }
-    expect(ts.every((t) => t === 0 || t === 1 / 30)).toBe(true);
+    // …then advances at the callback rate, anchored at the frozen value.
+    const switchIndex = 4 + MEDIA_TIME_STALL_FRAMES;
+    for (let i = switchIndex + 1; i < total; i++) {
+      expect(ts[i]).toBeCloseTo(frozen + (i - switchIndex) * 0.033, 10);
+    }
+  });
+
+  it("treats a backwards mediaTime jump (loop wrap) as progress", () => {
+    const { video, fire } = makeRvfcVideo();
+    const ts: number[] = [];
+    startFrameLoop(video, (t) => ts.push(t));
+
+    // A looping clip: mediaTime restarts near 0 at the wrap, then keeps
+    // advancing. Every frame changes, so the fallback must never trigger.
+    const mediaTimes = [29.9, 29.933, 29.966, 0.01, 0.043];
+    for (let i = 0; i < MEDIA_TIME_STALL_FRAMES; i++) {
+      mediaTimes.push(0.076 + i / 30);
+    }
+    mediaTimes.forEach((mt, i) => fire(i * 33, mt));
+    expect(ts).toEqual(mediaTimes);
   });
 
   it("stops delivering frames after the stop function is called", () => {
